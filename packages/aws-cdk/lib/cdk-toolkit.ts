@@ -126,9 +126,11 @@ export class CdkToolkit {
     const strict = !!options.strict;
     const contextLines = options.contextLines || 3;
     const stream = options.stream || process.stderr;
+    const json = options.json || false;
     const quiet = options.quiet || false;
 
-    let diffs = 0;
+    const stackDiffs = [];
+    let stackDiffCount = 0;
     const parameterMap = buildParameterMap(options.parameters);
 
     if (options.templatePath !== undefined) {
@@ -142,9 +144,14 @@ export class CdkToolkit {
       }
 
       const template = deserializeStructure(await fs.readFile(options.templatePath, { encoding: 'UTF-8' }));
-      diffs = options.securityOnly
-        ? numberFromBool(printSecurityDiff(template, stacks.firstStack, RequireApproval.Broadening, quiet))
-        : printStackDiff(template, stacks.firstStack, strict, contextLines, quiet, undefined, undefined, false, stream);
+
+      if (options.securityOnly) {
+        stackDiffCount += numberFromBool(printSecurityDiff(template, stacks.firstStack, RequireApproval.Broadening, quiet));
+      } else {
+        const stackDiff = printStackDiff(template, stacks.firstStack, strict, contextLines, quiet, undefined, undefined, false, stream);
+        stackDiffs.push(stackDiff);
+        stackDiffCount += stackDiff.stackDiffCount;
+      }
     } else {
       // Compare N stacks against deployed templates
       for (const stack of stacks.stackArtifacts) {
@@ -171,7 +178,7 @@ export class CdkToolkit {
             });
           } catch (e: any) {
             debug(e.message);
-            if (!quiet) {
+            if (!quiet && !json) {
               stream.write(`Checking if the stack ${stack.stackName} exists before creating the changeset has failed, will base the diff on template differences (run again with -v to see the reason)\n`);
             }
             stackExists = false;
@@ -193,20 +200,45 @@ export class CdkToolkit {
           }
         }
 
-        const stackCount =
-        options.securityOnly
-          ? (numberFromBool(printSecurityDiff(currentTemplate, stack, RequireApproval.Broadening, quiet, stack.displayName, changeSet)))
-          : (printStackDiff(
-            currentTemplate, stack, strict, contextLines, quiet, stack.displayName, changeSet, !!resourcesToImport, stream, nestedStacks,
-          ));
-
-        diffs += stackCount;
+        if (options.securityOnly) {
+          stackDiffCount += numberFromBool(
+            printSecurityDiff(
+              currentTemplate,
+              stack,
+              RequireApproval.Broadening,
+              quiet,
+              stack.displayName,
+              changeSet,
+            ),
+          );
+        } else {
+          const stackDiff = printStackDiff(
+            currentTemplate,
+            stack,
+            strict,
+            contextLines,
+            quiet,
+            stack.displayName,
+            changeSet,
+            !!resourcesToImport,
+            stream,
+            nestedStacks,
+          );
+          stackDiffs.push(stackDiff);
+          stackDiffCount += stackDiff.stackDiffCount;
+        }
       }
     }
 
-    stream.write(format('\n✨  Number of stacks with differences: %s\n', diffs));
+    if (!quiet && !json) {
+      stream.write(format('\n✨  Number of stacks with differences: %s\n', stackDiffCount));
+    }
 
-    return diffs && options.fail ? 1 : 0;
+    if (json) {
+      print(JSON.stringify(stackDiffs));
+    }
+
+    return stackDiffCount && options.fail ? 1 : 0;
   }
 
   public async deploy(options: DeployOptions) {
@@ -1212,6 +1244,13 @@ export interface DiffOptions {
   * @default false
   */
   quiet?: boolean;
+
+  /*
+  * Run diff and output results in JSON rather than diff format
+  *
+  * @default false
+  */
+  json?: boolean;
 
   /**
    * Additional parameters for CloudFormation at diff time, used to create a change set

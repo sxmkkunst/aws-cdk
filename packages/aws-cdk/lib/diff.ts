@@ -14,6 +14,12 @@ import * as chalk from 'chalk';
 import { NestedStackTemplates } from './api/nested-stack-helpers';
 import { print, warning } from './logging';
 
+export interface StackDiff {
+  stackName?: string;
+  nestedStackDiffs: StackDiff[];
+  stackDiffCount: number;
+}
+
 /**
  * Pretty-prints the differences between two template states to the console.
  *
@@ -35,7 +41,7 @@ export function printStackDiff(
   changeSet?: DescribeChangeSetOutput,
   isImport?: boolean,
   stream: FormatStream = process.stderr,
-  nestedStackTemplates?: { [nestedStackLogicalId: string]: NestedStackTemplates }): number {
+  nestedStackTemplates?: { [nestedStackLogicalId: string]: NestedStackTemplates }): StackDiff {
   let diff = fullDiff(oldTemplate, newTemplate.template, changeSet, isImport);
 
   // must output the stack name if there are differences, even if quiet
@@ -78,6 +84,7 @@ export function printStackDiff(
     print(chalk.yellow(`Omitted ${filteredChangesCount} changes because they are likely mangled non-ASCII characters. Use --strict to print them.`));
   }
 
+  const nestedStackDiffs = [];
   for (const nestedStackLogicalId of Object.keys(nestedStackTemplates ?? {})) {
     if (!nestedStackTemplates) {
       break;
@@ -85,7 +92,7 @@ export function printStackDiff(
     const nestedStack = nestedStackTemplates[nestedStackLogicalId];
 
     (newTemplate as any)._template = nestedStack.generatedTemplate;
-    stackDiffCount += printStackDiff(
+    const nestedStackDiff = printStackDiff(
       nestedStack.deployedTemplate,
       newTemplate,
       strict,
@@ -97,9 +104,17 @@ export function printStackDiff(
       stream,
       nestedStack.nestedStackTemplates,
     );
+    nestedStackDiffs.push(nestedStackDiff);
+
+    stackDiffCount += nestedStackDiff.stackDiffCount;
   }
 
-  return stackDiffCount;
+  return {
+    stackName,
+    ...diff,
+    nestedStackDiffs,
+    stackDiffCount,
+  };
 }
 
 export enum RequireApproval {
